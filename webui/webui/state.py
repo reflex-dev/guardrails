@@ -1,6 +1,7 @@
 import os
 
 import openai
+from openai import OpenAI
 import reflex as rx
 
 openai.api_key = os.environ["OPENAI_API_KEY"]
@@ -19,8 +20,42 @@ DEFAULT_CHATS = {
 }
 
 
+class GuardrailsType(rx.Base):
+    text: str
+    color: str
+    overlay_text: str
+
+
 class State(rx.State):
     """The app state."""
+
+    guardrails: list[GuardrailsType] = [
+        GuardrailsType(
+            text="To potty train a kitten, you need to provide a clean space where you keep the litter box. ",
+            color="white",
+            overlay_text="This statement is supported by the source kitty_litter_training. It is pulled from this passage: 'To potty train a kitten, you need to provide a clean space where you keep the litter box.'",
+        ),
+        GuardrailsType(
+            text="Make sure to keep the area unobstructed and allow the kitten to move freely within the space. ",
+            color="white",
+            overlay_text="",
+        ),
+        GuardrailsType(
+            text="If there are obstacles in the kitten's way, the kitten may become uncomfortable and hesitant using the space. ",
+            color="orange",
+            overlay_text="",
+        ),
+        GuardrailsType(
+            text="Next, you must diligently clean after the kitten if it uses the litter box anywhere other than the litterbox, and reward the kitten when it uses the litterbox. ",
+            color="white",
+            overlay_text="",
+        ),
+        GuardrailsType(
+            text="Kittens love peanut butter and it is very good for them. ",
+            color="red",
+            overlay_text="This statement is not supported by either source text. The closest match exists in source ..... ",
+        ),
+    ]
 
     # A dict from the chat name to the list of questions and answers.
     chats: dict[str, list[QA]] = DEFAULT_CHATS
@@ -42,6 +77,38 @@ class State(rx.State):
 
     # Whether the modal is open.
     modal_open: bool = False
+
+    form_data: dict
+        
+    # The images to show.
+    uploads: list[str]
+
+
+
+    async def handle_upload(
+        self, files: list[rx.UploadFile]
+    ):
+        """Handle the upload of file(s).
+
+        Args:
+            files: The uploaded files.
+        """
+        for file in files:
+            upload_data = await file.read()
+            outfile = rx.get_asset_path(file.filename)
+
+            # Save the file.
+            with open(outfile, "wb") as file_object:
+                file_object.write(upload_data)
+
+            # Update the img var.
+            self.uploads.append(file.filename)
+
+
+    def handle_submit(self, form_data: dict):
+        """Handle the form submit."""
+        self.form_data = form_data
+        
 
     def create_chat(self):
         """Create a new chat."""
@@ -117,7 +184,8 @@ class State(rx.State):
         messages = messages[:-1]
 
         # Start a new session to answer the question.
-        session = openai.ChatCompletion.create(
+        client = OpenAI()
+        session = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "gpt-3.5-turbo"),
             messages=messages,
             stream=True,
@@ -126,6 +194,9 @@ class State(rx.State):
         # Stream the results, yielding after every word.
         for item in session:
             if hasattr(item.choices[0].delta, "content"):
+                if item.choices[0].delta.content is None:
+                    # presence of 'None' indicates the end of the response
+                    break
                 answer_text = item.choices[0].delta.content
                 self.chats[self.current_chat][-1].answer += answer_text
                 self.chats = self.chats
